@@ -1,0 +1,201 @@
+*-----------------------------------------------------------------------------
+* <Rating>1587</Rating>
+*-----------------------------------------------------------------------------
+    SUBROUTINE PACS.SPBAL.NON.SUSPLOAN.CORR
+
+    $INSERT I_COMMON
+    $INSERT I_EQUATE
+    $INSERT I_F.EB.CONTRACT.BALANCES
+    $INSERT I_F.AA.ACCOUNT.DETAILS
+    $INSERT I_F.AA.ARRANGEMENT
+    $INSERT I_F.AA.SCHEDULED.ACTIVITY
+    $INSERT I_F.AA.PROPERTY
+    $INSERT I_F.AC.BALANCE.TYPE
+    $INSERT I_F.AA.BILL.DETAILS
+    $INSERT I_F.AA.INTEREST.ACCRUALS
+    $INSERT I_F.AA.ACTIVITY.HISTORY
+    $INSERT I_F.AA.ACTIVITY.BALANCES
+    $INSERT I_F.ACCT.ACTIVITY
+	$INSERT I_F.EB.LOOKUP
+
+
+    GOSUB initialise
+    GOSUB getInterestproperties
+
+    WRITE SYS.ECB.AC TO SAVEDLISTS,"AA.ADJ.BAL"
+    WRITE SYS.ECB.AC TO SAVEDLISTS,"AL.SUSP.BAL"
+    WRITE WRITE.INT TO SAVEDLISTS,"AL.INT.WRITE"
+
+    RETURN
+
+initialise:
+
+    CNT.MAT = 0
+    WRITE.INT = ''
+    F$AA.ARRANGEMENT = ""
+    FN$AA.ARRANGEMENT = 'F.AA.ARRANGEMENT'
+    CALL OPF(FN$AA.ARRANGEMENT, F$AA.ARRANGEMENT)
+*
+    FN.AC.DLS = "F.AA.ACCOUNT.DETAILS"
+    F.AC.DLS = ''
+    CALL OPF(FN.AC.DLS,F.AC.DLS)
+*
+    FN.AB = 'F.AA.ACTIVITY.BALANCES'
+   F.AB = ''
+    CALL OPF(FN.AB, F.AB)
+*
+    F.AA.BILL = 'F.AA.BILL.DETAILS'
+    FN.AA.BILL = ''
+    CALL OPF(F.AA.BILL,FN.AA.BILL)
+*
+    fileNameECB = "F.EB.CONTRACT.BALANCES"
+    filePathECB = ""
+    CALL OPF(fileNameECB, filePathECB)
+*
+    F.ACTI = 'F.ACCT.ACTIVITY'
+    FN.ACTI = ''
+    CALL OPF(F.ACTI,FN.ACTI)
+*
+    FN.SL = '&SAVEDLISTS&'
+    F.SL = ''
+    CALL OPF(FN.SL, F.SL)
+*
+    fileNameInterestAccruals = 'F.AA.INTEREST.ACCRUALS'
+    filePathInterestAccruals = ''
+    CALL OPF(fileNameInterestAccruals,filePathInterestAccruals)
+*
+    F$AA.ACTIVITY.HISTORY = ''
+    FN$AA.ACTIVITY.HISTORY = "F.AA.ACTIVITY.HISTORY"
+    CALL OPF(FN$AA.ACTIVITY.HISTORY, F$AA.ACTIVITY.HISTORY)
+*
+    fileNameActivityBalances = "F.AA.ACTIVITY.BALANCES"
+    filePathActivityBalances = ""
+    CALL OPF(fileNameActivityBalances, filePathActivityBalances)
+*
+    F.SCH = 'F.AA.SCHEDULED.ACTIVITY'
+    FN.SCH = ''
+    CALL OPF(F.SCH,FN.SCH)
+
+*
+    F.NAU = 'F.AA.ACCOUNT.MOVEMENT'
+    FN.NAU = ''
+    CALL OPF(F.NAU,FN.NAU)
+
+*
+    OPEN '','&SAVEDLISTS&' TO SAVEDLISTS ELSE
+        ERR.OPEN ='EB.RTN.CANT.OPEN.&SAVEDLISTS'
+    END
+
+    ID.LIST = ""
+    SL.ID = "SL.SPBAL.CORR"
+    CALL F.READ(FN.SL, SL.ID, ID.LIST, F.SL, SL.ERR)
+
+    RETURN
+
+getInterestproperties:
+
+    CNT = 0
+
+    LOOP
+        CNT+ = 1
+        PRINT @(10,10):"PROCESSING ARRANGEMENTS----->:":CNT
+        REMOVE AAR.ID FROM ID.LIST SETTING A.POS
+
+    WHILE AAR.ID:A.POS
+        AA.ID = FIELD(AAR.ID,"/",1)
+
+        arrangementId = AA.ID
+        CO.CO = ''
+        AA.CNT = 0
+        SUSP.FLAG = ''
+        SUSP.STATUS = ''
+        SUSP.DATE = ''
+        CALL F.READ(FN$AA.ARRANGEMENT, arrangementId, R.ARRANGEMENT, F$AA.ARRANGEMENT, IO.ERR)
+        CALL F.READ(FN.AC.DLS,arrangementId, R.ACCD, F.AC.DLS, ERR.ACCD)
+		
+        SUSP.FLAG = R.ACCD<AA.AD.SUSPENDED,1>
+        SUSP.DATE = R.ACCD<AA.AD.SUSP.DATE,1>
+        SUSP.STATUS =  R.ACCD<AA.AD.SUSP.STATUS,1>
+		
+        accountId=R.ARRANGEMENT<AA.ARR.LINKED.APPL.ID,1>
+        CO.CO = R.ARRANGEMENT<AA.ARR.CO.CODE>
+        COMP.BRANCH = ''
+        COMP.BRANCH = CO.CO[6,4]
+        CURR = ''
+        CURR = R.ARRANGEMENT<AA.ARR.CURRENCY>
+      
+        R.NAU = ''
+        CALL F.READ(F.NAU,accountId,R.NAU,FN.NAU,IO.NAU)
+
+        IF NOT(R.NAU) THEN
+            GOSUB getECB
+            GOSUB doChecks
+        END
+
+    REPEAT
+
+    RETURN
+
+getECB:
+
+    CALL F.READ(fileNameECB, accountId, ECBrecord, filePathECB, "")
+
+    RETURN
+
+doChecks:
+
+    CALL AA.CONSOLIDATE.ECB.AMOUNTS(ECBrecord)    ;* Add the movements and the opening balance to arrive at the current balance
+
+    totalBalances1 = DCOUNT(ECBrecord<ECB.CURR.ASSET.TYPE>,VM)
+
+    IF NOT(totalBalances1) THEN
+
+        totalBalances1 = 1
+    END
+
+    FOR balanceTypepos1 = 1 TO totalBalances1
+        balanceType = ''
+        balanceAmount = ''
+        balanceType = ECBrecord<ECB.TYPE.SYSDATE,balanceTypepos1>
+        balanceTypeLength = LEN(balanceType)
+        balProperty = balanceType[4,balanceTypeLength-3]
+        balSuffix=balanceType[balanceTypeLength-1,balanceTypeLength]
+
+        IF NOT(SUSP.FLAG) AND ( NOT(SUSP.STATUS) OR SUSP.STATUS EQ 'ACCRUE') THEN
+		
+			IF balSuffix[1,2] EQ 'SP' THEN
+				 
+				*reqdBalanceType = balanceType[1,balanceTypeLength-2]
+				reqdBalanceType = balanceType
+				 
+				GOSUB getbalanceAmount
+				 
+				IF returnAmount.SP NE 0 THEN
+					 
+					SYS.ECB.AC<-1>=arrangementId:'*#':balanceType:'*':returnAmount.SP:'#PL51001*':(-1*returnAmount.SP)
+					
+				END
+				 
+			END
+		
+		END
+		
+    NEXT balanceTypepos1
+	   	
+RETURN
+
+getbalanceAmount:
+
+    returnAmount = 0
+    requestType = ""
+    requestType<2> = "ALL"
+    requestType<4> = ""
+    balanceDetails = ""
+    CALL AA.GET.PERIOD.BALANCES(accountId, reqdBalanceType, requestType, TODAY, "", "", balanceDetails, retErr)
+  
+    returnAmount.SP = balanceDetails<IC.ACT.BALANCE> + 0
+
+    RETURN
+
+
+END
